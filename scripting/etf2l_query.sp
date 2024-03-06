@@ -17,10 +17,19 @@ public Plugin myinfo =
     url = ""
 };
 
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
+{
+    CreateNative("ETF2LQuery", Native_ETF2LQuery)
+    CreateNative("ActiveETF2LParticipant", Native_ActiveETF2LParticipant);
+    CreateNative("ActiveETF2LBan", Native_ActiveETF2LBan);
+
+    return APLRes_Success;
+}
+
 #define API_ENDPOINT "api-v2.etf2l.org/player/"
-#define SQL_CONF "etf2l"
 
 Database db;
+
 DBStatement InsertNewPlayerStmt = null;
 DBStatement UpdatePlayerStmt = null;
 DBStatement PlayerExistsStmt = null;
@@ -49,38 +58,14 @@ any Native_ActiveETF2LBan(Handle plugin, int numParams)
     return PlayerIsBanned(steamid);
 }
 
-/**************************/
-/** System2 HTTP Queries **/
-/**************************/
-
 any Native_ETF2LQuery(Handle plugin, int numParams)
 {
-    char url[128] = API_ENDPOINT;
     char steamid[64];
     GetNativeString(1, steamid, sizeof(steamid));
 
-    StrCat(url, sizeof(url), steamid);
-    System2HTTPRequest httpReq = new System2HTTPRequest(HttpPlayerCallback, url);
-    httpReq.Timeout = 10;
-    httpReq.GET();
-    delete httpReq;
+    MakeHTTPRequest(steamid);
 
-    if (PlayerExists(steamid))
-    {
-        if (!PlayerIsActive(steamid)) // has the player participated in a match since last attempt
-        {
-            StrCat(url, sizeof(url), "/results");
-            System2HTTPRequest resultReq = new System2HTTPRequest(HttpResultsCallback, url);
-            resultReq.Timeout = 10;
-            resultReq.SetData(steamid); 
-            resultReq.GET();
-            delete resultReq;
-        }
-
-        return true;
-    }
-
-    return false;
+    return true;
 }
 
 public Action ServerETF2LQuery(int args)
@@ -91,30 +76,30 @@ public Action ServerETF2LQuery(int args)
         return Plugin_Handled;
     }
 
-    char url[128] = API_ENDPOINT;
     char steamid[64];
     GetCmdArg(1, steamid, sizeof(steamid));
 
-    StrCat(url, sizeof(url), steamid);
-    System2HTTPRequest httpReq = new System2HTTPRequest(HttpPlayerCallback, url);
-    httpReq.Timeout = 10;
-    httpReq.GET();
-    delete httpReq;
-
-    if (PlayerExists(steamid))
-    {
-        if (!PlayerIsActive(steamid)) // check if the player has become active
-        {
-            StrCat(url, sizeof(url), "/results");
-            System2HTTPRequest resultReq = new System2HTTPRequest(HttpResultsCallback, url);
-            resultReq.Timeout = 10;
-            resultReq.SetData(steamid); 
-            resultReq.GET();
-            delete resultReq;
-        }
-    }
+    MakeHTTPRequest(steamid);
 
     return Plugin_Handled;
+}
+
+/**************************/
+/** System2 HTTP Queries **/
+/**************************/
+
+void MakeHTTPRequest(const char[] steamid)
+{
+    char url[128] = API_ENDPOINT;
+    StrCat(url, sizeof(url), steamid);
+
+    System2HTTPRequest httpReq = new System2HTTPRequest(HttpPlayerCallback, url);
+
+    httpReq.Timeout = 10;
+    httpReq.SetData(steamid);
+    httpReq.GET();
+    
+    delete httpReq;
 }
 
 public void HttpPlayerCallback(bool success, const char[] error, System2HTTPRequest req,
@@ -125,12 +110,27 @@ System2HTTPResponse resp, HTTPRequestMethod method)
         char[] content = new char[resp.ContentLength + 1];
         resp.GetContent(content, resp.ContentLength + 1);
         
-        // prints the response only partially
-        PrintToServer("Query response: %s\n", content);
-
         if (ParseJSON(content))
         {
-            PrintToServer("\nJSON response successfully parsed\n");
+            char steamid[64];
+            req.GetData(steamid, sizeof(steamid));
+            
+            if (PlayerExists(steamid))
+            {
+                if (!PlayerIsActive(steamid)) // has the player participated in a match since last attempt
+                {
+                    char url[128];
+                    resp.GetLastURL(url, sizeof(url));
+                    
+                    StrCat(url, sizeof(url), "/results");
+
+                    System2HTTPRequest resultReq = new System2HTTPRequest(HttpResultsCallback, url);
+                    resultReq.Timeout = 10;
+                    resultReq.SetData(steamid); 
+                    resultReq.GET();
+                    delete resultReq;
+                }
+            }
         }
         else
         {
@@ -394,6 +394,22 @@ void PrepareSQL()
     if (db == null)
     {
         SetFailState("Could not connect to ETF2L player database: %s", err);
+    }
+    else
+    {
+        SQL_Query(db, "CREATE TABLE IF NOT EXISTS players \
+        ( \
+            steamid TEXT UNIQUE, \
+            name    TEXT NOT NULL, \
+            country TEXT NOT NULL, \
+            id      INTEGER UNIQUE, \
+            reg     INTEGER, \
+            first   INTEGER, \
+            active  INTEGER, \
+            ban     INTEGER, \
+            team    TEXT, \
+            last    INTEGER  \
+        )");
     }
 
     PlayerExistsStmt = SQL_PrepareQuery(db, "SELECT EXISTS(SELECT 1 FROM players WHERE steamid=?)",
