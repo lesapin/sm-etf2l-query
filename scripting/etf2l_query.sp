@@ -65,7 +65,7 @@ any Native_ETF2LQuery(Handle plugin, int numParams)
 
     MakeHTTPRequest(steamid);
 
-    return true;
+    return PlayerExists(steamid);
 }
 
 public Action ServerETF2LQuery(int args)
