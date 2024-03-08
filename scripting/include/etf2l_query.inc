@@ -3,6 +3,8 @@
 #endif
 #define _etf2l_query_included_
 
+#define SQL_CONF "etf2l"
+
 /**
  *  Query ETF2L API for player information and store it in a database.
  * 
