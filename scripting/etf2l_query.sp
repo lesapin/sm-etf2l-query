@@ -36,29 +36,36 @@ DBStatement PlayerExistsStmt = null;
 DBStatement PlayerIsActiveStmt = null;
 DBStatement SetPlayerActiveStmt = null;
 
+Menu ProfileMenu[MAXPLAYERS];
+
 public void OnPluginStart()
 {
     PrepareSQL();
 
     RegServerCmd("etf2l_query", ServerETF2LQuery);
     RegServerCmd("etf2l_query_create_db", CreateSQLite);
+
+    RegConsoleCmd("etf2l-query", Command_ETF2L_Query);    
+    RegConsoleCmd("profile", Command_Profile);
 }
 
-any Native_ActiveETF2LParticipant(Handle plugin, int numParams)
+/*** NATIVES ***/
+
+public int Native_ActiveETF2LParticipant(Handle plugin, int numParams)
 {
     char steamid[64];
     GetNativeString(1, steamid, sizeof(steamid));
     return PlayerIsActive(steamid);
 }
 
-any Native_ActiveETF2LBan(Handle plugin, int numParams)
+public int Native_ActiveETF2LBan(Handle plugin, int numParams)
 {
     char steamid[64];
     GetNativeString(1, steamid, sizeof(steamid));
     return PlayerIsBanned(steamid);
 }
 
-any Native_ETF2LQuery(Handle plugin, int numParams)
+public int Native_ETF2LQuery(Handle plugin, int numParams)
 {
     char steamid[64];
     GetNativeString(1, steamid, sizeof(steamid));
@@ -67,6 +74,8 @@ any Native_ETF2LQuery(Handle plugin, int numParams)
 
     return PlayerExists(steamid);
 }
+
+/*** COMMANDS ***/
 
 public Action ServerETF2LQuery(int args)
 {
@@ -80,6 +89,85 @@ public Action ServerETF2LQuery(int args)
     GetCmdArg(1, steamid, sizeof(steamid));
 
     MakeHTTPRequest(steamid);
+
+    return Plugin_Handled;
+}
+
+public Action Command_Profile(int client, int args)
+{
+    char steamid[64];
+
+    if (!GetClientAuthId(client, AuthId_SteamID64, steamid, sizeof(steamid), true))
+        return Plugin_Handled;
+
+    DBResultSet q;
+
+    if (args == 0)
+    {
+        char query[256];
+        Format(query, sizeof(query), "SELECT * FROM players WHERE steamid = '%s'", steamid);
+
+        q = SQL_Query(db, query);
+        if (q == null)
+        {
+
+        }
+    }
+    else if (args == 1)
+    {
+
+    }
+    else
+    {
+
+    }
+
+    if (ProfileMenu[client] != null)
+        delete ProfileMenu[client];
+
+    ProfileMenu[client] = CreateMenu(Menu_PlayerSelectHandler);
+
+    int numItems = SQL_GetRowCount(q);
+
+    for (int i = 0; i < numItems; i++)
+    {
+        SQL_FetchRow(q);
+
+        char playersid[64], name[32], team[32], infoStr[64];
+
+        SQL_FetchString(q, 0, playersid, sizeof(playersid));
+        SQL_FetchString(q, 1, name, sizeof(name));
+        SQL_FetchString(q, 8, team, sizeof(team));
+
+        Format(infoStr, sizeof(infoStr), "%s (%s)", name, team);
+
+        ProfileMenu[client].AddItem(playersid, infoStr);
+    }
+
+    ProfileMenu[client].SetTitle("Select a player:");
+
+    if (numItems == 0)
+    {
+        PrintToChat(client, "[etf2l-query] player not found");
+    }
+    else if (numItems == 1)
+    {
+        Menu_ShowInfo(client, steamid);
+    }
+    else
+    {
+        ProfileMenu[client].Display(client, MENU_TIME_FOREVER);
+    }
+
+    delete q;
+    return Plugin_Handled;
+}
+
+public Action Command_ETF2L_Query(int client, int args)
+{
+    PrintToChat(client, "[ETF2L Query] Ver. %s", PLUGIN_VERSION);
+    PrintToChat(client, "\tQuery ETF2L API for player information");
+    PrintToChat(client, "\tPlugin by: Robert");
 
     return Plugin_Handled;
 }
@@ -563,4 +651,60 @@ void UpdatePlayer(const char[] steamid, int ban, const char[] team, int last)
     {
 
     }
+}
+
+/********************/
+/*** PROFILE MENU ***/
+/********************/
+
+void Menu_ShowInfo(int client, const char[] steamid)
+{
+    char query[128];
+    Format(query, sizeof(query), "SELECT * FROM players WHERE steamid = '%s'", steamid);
+    
+    Panel panel = CreatePanel(GetMenuStyleHandle(MenuStyle_Radio));
+    DBResultSet q = SQL_Query(db, query);
+
+    if (q != null)
+    {
+        SQL_FetchRow(q);
+
+        char name[32], team[32]; 
+        char fmtStr[64];
+
+        SQL_FetchString(q, 1, name, sizeof(name));
+        SQL_FetchString(q, 8, team, sizeof(team));
+
+        panel.SetTitle("Player profile");
+        panel.DrawText("----------------------------");
+
+        Format(fmtStr, sizeof(fmtStr), "Name: %s", name);
+        panel.DrawText(fmtStr);
+        Format(fmtStr, sizeof(fmtStr), "SteamID64: %s", steamid);
+        panel.DrawText(fmtStr);
+        Format(fmtStr, sizeof(fmtStr), "Team: %s", team);
+        panel.DrawText(fmtStr);
+
+        panel.Send(client, Menu_PlayerInfoHandler, MENU_TIME_FOREVER);
+    }
+
+    delete panel;
+    delete q;
+}
+
+public int Menu_PlayerSelectHandler(Menu menu, MenuAction action, int param1, int param2)
+{
+    if (action == MenuAction_Select)
+    {
+        
+
+    }
+
+    return 0;
+}
+
+public int Menu_PlayerInfoHandler(Menu menu, MenuAction action, int param1, int param2)
+{
+
+    return 0;
 }
