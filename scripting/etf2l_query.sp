@@ -1,12 +1,16 @@
 #include <sourcemod>
 #include <dbi>
-#include <etf2l_query>
 #include <system2>
 #include <smjansson>
 
+#include <etf2l_query>
+#include <bitstr64_17x10.inc>
+
 #pragma newdecls required
 
-#define PLUGIN_VERSION "1.0.0"
+#define PLUGIN_VERSION "1.7.0"
+
+bool IsMGE = false;
 
 public Plugin myinfo =
 {
@@ -16,6 +20,15 @@ public Plugin myinfo =
     version = PLUGIN_VERSION,
     url = ""
 };
+
+public void OnAllPluginsLoaded()
+{
+    if (LibraryExists("MGE"))
+    {
+        LogMessage("Found MGE plugin");
+        IsMGE = true;
+    }
+}
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
@@ -31,19 +44,20 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 Database db;
 
 DBStatement InsertNewPlayerStmt = null;
-DBStatement UpdatePlayerStmt = null;
-DBStatement PlayerExistsStmt = null;
-DBStatement PlayerIsActiveStmt = null;
+DBStatement UpdatePlayerStmt    = null;
+DBStatement PlayerExistsStmt    = null;
+DBStatement PlayerIsActiveStmt  = null;
 DBStatement SetPlayerActiveStmt = null;
+DBStatement SelectByNameStmt    = null;
 
-Menu ProfileMenu[MAXPLAYERS];
+Menu PlayerMenu[MAXPLAYERS];
 
 public void OnPluginStart()
 {
     PrepareSQL();
 
-    RegServerCmd("etf2l_query", ServerETF2LQuery);
-    RegServerCmd("etf2l_query_create_db", CreateSQLite);
+    //RegServerCmd("etf2l_query", ServerETF2LQuery);
+    //RegServerCmd("etf2l_query_create_db", CreateSQLite);
 
     RegConsoleCmd("etf2l-query", Command_ETF2L_Query);    
     RegConsoleCmd("profile", Command_Profile);
@@ -100,66 +114,26 @@ public Action Command_Profile(int client, int args)
     if (!GetClientAuthId(client, AuthId_SteamID64, steamid, sizeof(steamid), true))
         return Plugin_Handled;
 
-    DBResultSet q;
-
     if (args == 0)
     {
-        char query[256];
-        Format(query, sizeof(query), "SELECT * FROM players WHERE steamid = '%s'", steamid);
-
-        q = SQL_Query(db, query);
-        if (q == null)
-        {
-
-        }
+        Menu_ShowPlayerInfo(client, steamid);
     }
     else if (args == 1)
     {
+        char name[32];
+        GetCmdArg(1, name, sizeof(name));
 
+        SQL_BindParamString(SelectByNameStmt, 0, name, false);
+        if (SQL_Execute(SelectByNameStmt))
+        {
+            Menu_CreatePlayerMenu(client);
+        }      
     }
     else
     {
 
     }
 
-    if (ProfileMenu[client] != null)
-        delete ProfileMenu[client];
-
-    ProfileMenu[client] = CreateMenu(Menu_PlayerSelectHandler);
-
-    int numItems = SQL_GetRowCount(q);
-
-    for (int i = 0; i < numItems; i++)
-    {
-        SQL_FetchRow(q);
-
-        char playersid[64], name[32], team[32], infoStr[64];
-
-        SQL_FetchString(q, 0, playersid, sizeof(playersid));
-        SQL_FetchString(q, 1, name, sizeof(name));
-        SQL_FetchString(q, 8, team, sizeof(team));
-
-        Format(infoStr, sizeof(infoStr), "%s (%s)", name, team);
-
-        ProfileMenu[client].AddItem(playersid, infoStr);
-    }
-
-    ProfileMenu[client].SetTitle("Select a player:");
-
-    if (numItems == 0)
-    {
-        PrintToChat(client, "[etf2l-query] player not found");
-    }
-    else if (numItems == 1)
-    {
-        Menu_ShowInfo(client, steamid);
-    }
-    else
-    {
-        ProfileMenu[client].Display(client, MENU_TIME_FOREVER);
-    }
-
-    delete q;
     return Plugin_Handled;
 }
 
@@ -537,6 +511,11 @@ void PrepareSQL()
     if (UpdatePlayerStmt == null)
         LogError("UpdatePlayerStmt error");
 
+    SelectByNameStmt = SQL_PrepareQuery(db, "SELECT steamid, name, team FROM players WHERE name=?",
+                                        err, sizeof(err));
+
+    if (SelectByNameStmt == null)
+        LogError("SelectByNameStmt error");
 }
 
 public Action CreateSQLite(int args)
@@ -653,38 +632,147 @@ void UpdatePlayer(const char[] steamid, int ban, const char[] team, int last)
     }
 }
 
-/********************/
-/*** PROFILE MENU ***/
-/********************/
+/*******************/
+/*** PLAYER MENU ***/
+/*******************/
 
-void Menu_ShowInfo(int client, const char[] steamid)
+bool Menu_CreatePlayerMenu(int client)
+{
+    int numItems = SQL_GetRowCount(SelectByNameStmt);
+    if (numItems == 0)
+    {
+        PrintToChat(client, "[MGEME] player not found");
+        return false;
+    }
+
+    if (PlayerMenu[client] != null)
+        delete PlayerMenu[client];
+
+    PlayerMenu[client] = CreateMenu(Menu_PlayerSelectHandler);
+    PlayerMenu[client].SetTitle("Select a player:");
+
+    char steamid[64];
+
+    for (int i = 0; i < numItems; i++)
+    {
+        SQL_FetchRow(SelectByNameStmt);
+
+        char name[32], team[32], infoStr[64];
+
+        SQL_FetchString(SelectByNameStmt, 0, steamid, sizeof(steamid));
+        SQL_FetchString(SelectByNameStmt, 1, name, sizeof(name));
+        SQL_FetchString(SelectByNameStmt, 2, team, sizeof(team));
+
+        Format(infoStr, sizeof(infoStr), "%s (%s)", name, team);
+
+        PlayerMenu[client].AddItem(steamid, infoStr);
+    }
+
+    if (numItems == 1)
+    {
+        Menu_ShowPlayerInfo(client, steamid);
+    }
+    else
+    {
+        PlayerMenu[client].Display(client, MENU_TIME_FOREVER);
+    }
+
+    return true;
+}
+
+void Menu_ShowPlayerInfo(int client, const char[] steamid)
 {
     char query[128];
     Format(query, sizeof(query), "SELECT * FROM players WHERE steamid = '%s'", steamid);
     
     Panel panel = CreatePanel(GetMenuStyleHandle(MenuStyle_Radio));
+    SetPanelKeys(panel, 2);
+
     DBResultSet q = SQL_Query(db, query);
 
     if (q != null)
     {
         SQL_FetchRow(q);
 
-        char name[32], team[32]; 
-        char fmtStr[64];
+        char name[32], team[32], country[32]; 
+        char firstSeen[32], lastSeen[32];
+        char banExpires[32];
+        char fmtStr[128];
 
         SQL_FetchString(q, 1, name, sizeof(name));
+        SQL_FetchString(q, 2, country, sizeof(name));
+        //int id          = SQL_FetchInt(q, 3);
+        //int registered  = SQL_FetchInt(q, 4);
+        int first       = SQL_FetchInt(q, 5);
+        //int active      = SQL_FetchInt(q, 6);
+        int ban         = SQL_FetchInt(q, 7);
         SQL_FetchString(q, 8, team, sizeof(team));
+        int last        = SQL_FetchInt(q, 9);
 
-        panel.SetTitle("Player profile");
-        panel.DrawText("----------------------------");
+        FormatTime(firstSeen, sizeof(firstSeen), "%D", first);
+        FormatTime(lastSeen, sizeof(lastSeen), "%D", last);
 
-        Format(fmtStr, sizeof(fmtStr), "Name: %s", name);
-        panel.DrawText(fmtStr);
-        Format(fmtStr, sizeof(fmtStr), "SteamID64: %s", steamid);
+        if (ban == 0)
+            Format(banExpires, sizeof(banExpires), "no active bans");
+        else
+            FormatTime(banExpires, sizeof(banExpires), "%D", ban);
+
+        Format(fmtStr, sizeof(fmtStr), "%s [%s]", name, steamid);
+        panel.SetTitle(fmtStr);
+
+        PrintToChat(client, fmtStr);
+        Format(fmtStr, sizeof(fmtStr), "Country: %s", country);
         panel.DrawText(fmtStr);
         Format(fmtStr, sizeof(fmtStr), "Team: %s", team);
         panel.DrawText(fmtStr);
+        //panel.DrawText(" ");
+        Format(fmtStr, sizeof(fmtStr), "First Seen: %s", firstSeen);
+        panel.DrawText(fmtStr);
+        Format(fmtStr, sizeof(fmtStr), "Last Seen: %s", lastSeen);
+        panel.DrawText(fmtStr);
+        panel.DrawText(" ");
+        Format(fmtStr, sizeof(fmtStr), "Bans: %s", banExpires);
+        panel.DrawText(fmtStr);
+    
+        if (IsMGE && SQL_CheckConfig("mgemod"))
+        {
+            char err[255];
+            Database mgedb = SQL_Connect("mgemod", true, err, sizeof(err));
 
+            if (mgedb != null)
+            {
+                char steamid2[64];
+                Id64ToId2(steamid, steamid2, sizeof(steamid2));
+
+                char query2[256];
+                Format(query2, sizeof(query2), "SELECT wins, losses FROM mgemod_stats WHERE steamid='%s'", steamid2);
+
+                DBResultSet q2 = SQL_Query(mgedb, query2);
+                if (q2 != null)
+                {
+                    if (SQL_FetchRow(q2))
+                    {
+                        int wins = SQL_FetchInt(q2, 0);
+                        int losses = SQL_FetchInt(q2, 1);
+                        Format(fmtStr, sizeof(fmtStr), "MGE Matches: %i", wins+losses);
+                        panel.DrawText(fmtStr);
+                    }
+                    else
+                        PrintToChat(client, "SQL row fetch failed, RowCount: %i", SQL_GetRowCount(q2));
+                }
+                else
+                    PrintToChat(client, "SQL mgedb query failed");
+
+                delete q2;
+            }
+            else
+                PrintToChat(client, "SQL mgedb not connected");
+
+            delete mgedb;
+        }
+
+        panel.DrawText(" ");
+        panel.DrawItem("Return");
         panel.Send(client, Menu_PlayerInfoHandler, MENU_TIME_FOREVER);
     }
 
@@ -707,4 +795,56 @@ public int Menu_PlayerInfoHandler(Menu menu, MenuAction action, int param1, int 
 {
 
     return 0;
+}
+
+/***************/
+/*** UTILITY ***/
+/***************/
+
+void StrToBits64(const char[] source)
+{
+    int sid64len = 17;
+    int BITS64[2] = { 0, 0 };
+    int Number, NextLowBits, Carriage;
+    char StrInt[2];
+
+    for (int i = sid64len - 1; i >= 0; i--)
+    {
+        strcopy(StrInt, sizeof(StrInt), source[i]);
+        PrintToServer("num: %i", StringToInt(StrInt));
+        Number = StringToInt(StrInt);//StringToInt(source[i]);
+        NextLowBits = BITS64[1] + bitstr64[i][Number][1];
+
+        PrintToServer("i: %i, Num: %i, NextLowBits: %i", i, Number, NextLowBits);
+
+        if (NextLowBits < 0)
+        {
+            Carriage = (NextLowBits + 2147483648);
+            PrintToServer("Carriage: %i", Carriage);
+            BITS64[0] += Carriage;
+            BITS64[1] = 0;
+        }
+        else
+        {
+            BITS64[1] = NextLowBits;
+        }
+
+        BITS64[0] += bitstr64[i][Number][0];
+    }
+
+    PrintToServer("HiBit: %032b\nLoBit: %032b", BITS64[0], BITS64[1]);
+    //PrintToServer("maxint: %i", 2147483647+2147483648);
+}
+
+void Id64ToId2(const char[] source, char[] dest, int dsize)
+{
+    int bits[2];
+    StringToInt64(source, bits);
+/*
+    int XNum, YNum, ZNum;
+    XNum = bits[1] >> 24; // "universe"
+    YNum = (bits[0] << 31) >> 31; // part of the id number
+    ZNum = bits[0] >> 1; // "account number"
+*/
+    Format(dest, dsize, "STEAM_%i:%i:%i", 0, (bits[0] << 31) >> 31, bits[0] >> 1);
 }
