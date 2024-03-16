@@ -5,12 +5,12 @@ numRange = 9
 
 HEADER = "#if defined _64bitstr_included_\n    #endinput\n#endif\n#define _64bitstr_included_\n\n"
 
-with open("64bitstr_{}x{}.inc".format(numCount, numRange), 'w', encoding="utf-8") as f:
+with open("bitstr64_{}x{}.inc".format(numCount, numRange), 'w', encoding="utf-8") as f:
     f.write(HEADER)
-    f.write("#define 64BITSTR_NUM_COUNT {}\n".format(numCount))
-    f.write("#define 64BITSTR_NUM_RANGE {}\n\n".format(numRange))
+    f.write("#define BITSTR64_NUM_COUNT {}\n".format(numCount))
+    f.write("#define BITSTR64_NUM_RANGE {}\n\n".format(numRange))
 
-    arr = "64bitstr[{}][{}][2] =\n\t{{\n".format(numCount, numRange)
+    arr = "bitstr64[{}][{}][2] =\n\t{{\n".format(numCount, numRange)
     shift = np.uint64(32)
 
     for row in range(0, numCount):
