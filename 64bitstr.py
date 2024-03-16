@@ -3,7 +3,7 @@ import numpy as np
 numCount = 17
 numRange = 9
 
-HEADER = "#if defined _64bitstr_included_\n    #endinput\n#endif\n#define _64bitstr_included_\n\n"
+HEADER = "#if defined _bitstr64_included_\n    #endinput\n#endif\n#define _bitstr64_included_\n\n"
 
 with open("bitstr64_{}x{}.inc".format(numCount, numRange), 'w', encoding="utf-8") as f:
     f.write(HEADER)
